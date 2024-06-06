@@ -1,0 +1,8 @@
+annotated-types==0.7.0
+cloudpickle==3.0.0
+Farama-Notifications==0.0.4
+gymnasium==0.29.1
+numpy==1.26.4
+pydantic==2.7.3
+pydantic_core==2.18.4
+typing_extensions==4.12.1
