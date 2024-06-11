@@ -142,40 +142,28 @@ class NaiveServant:
         self.env = env
         self.player = player
         self.role = env.get_role(player)
-        self.probabilities_good = [(self.env.num_good - 1) / (self.env.num_players - 1) for _ in range(self.env.num_players)]
-        self.probabilities_good[self.player] = 1
-        #self.believes = {combination: 0 for combination in self.env.get_team_combinations()}
-        self.exclude_combinations = []
+        self.possible_combinations = self.env.get_combinations_for_servant(player)
+        self.probabilities_good = np.array(self.possible_combinations).sum(axis=0) / len(self.possible_combinations)
     
     def __repr__(self):
         return f"NaiveServant(player #{self.player}, role={self.role}"
-    
-    # Function to check if a tuple is part of any exclude set
-    def _is_excluded(self, combo, exclude_sets):
-        combo_set = set(combo)
-        for ex_set in exclude_sets:
-            if combo_set.issubset(ex_set):
-                return True
-        return False
-    
-    
+        
     def get_team_with_hightest_probability(self):
         """
+        1. All possible combinations of players, for example (G, E, G, G, E)
+
         Returns:
             a list of teams with the highest probabilities to be Good
         """
         team_combinations = self.env.get_team_combinations()  # all possible team combinations
-        
+
         # Calculate the probability for each team combination
         team_combinations_probabilities = []
         for team_combination in team_combinations:
-            if not self._is_excluded(team_combination, self.exclude_combinations):  # if the team comb is not in excluded
-                probability = 1
-                for player in team_combination:
-                    probability *= self.probabilities_good[player]
-                team_combinations_probabilities.append(probability)
-            else:
-                team_combinations_probabilities.append(0)
+            probability = 1
+            for player in team_combination:
+                probability *= self.probabilities_good[player]
+            team_combinations_probabilities.append(probability)
 
         highest_probability = max(team_combinations_probabilities)
         
@@ -187,13 +175,13 @@ class NaiveServant:
 
         return teams_with_highest_probability
     
-    
     def play(self, verbose=False):
         """
         PHASE 0. 
         """
 
         ######### PHASE 0 ##########
+        
         teams_with_hightest_probability = self.get_team_with_hightest_probability()
         team = random.choice(teams_with_hightest_probability)
         if self.env.phase == 0 and self.env.leader == self.player:
@@ -221,54 +209,35 @@ class NaiveServant:
         elif self.env.phase == 2 and self.player in self.env.quest_team:
             return 1
         
-    def update_believes(self, verbose=False):        
-        if verbose:
-            print(f"+++++ Updating Believes for player #{self.player}")
-        
-        # Updating believes
-        evil_containing_combination = []
-        # If I am in the Quest Team
-        if self.player in self.env.quest_team:
-            if sum(self.env.quest_votes) <= 1: # only I voted for the Success => all other players are Evil
-                for member in self.env.quest_team:
-                    if member != self.player:
-                        self.probabilities_good[member] = 0
-                        if verbose:
-                            print(f"Belief: Player #{member} is Evil.")
-            elif sum(self.env.quest_votes)  == len(self.env.quest_votes): # all the players voted 1
-                for member in self.env.quest_team:
-                    self.probabilities_good[member] = 1
-                    if verbose:
-                        print(f"Belief: Player #{member} is Good.")
-            else:
-                #evil_containing_combination = []
-                for member in self.env.quest_team:
-                    if member != self.player:
-                        evil_containing_combination.append(member)
-             
-        # If I am not in the Quest Team
-        else:
-            if sum(self.env.quest_votes) == 0:
-                for member in self.env.quest_team:
-                    self.probabilities_good[member] = 0
-                    if verbose:
-                        print(f"Belief: Player #{member} is Evil.")
-            elif sum(self.env.quest_votes)  == len(self.env.quest_votes): # all the players voted 1
-                for member in self.env.quest_team:
-                    self.probabilities_good[member] = 1
-                    if verbose:
-                        print(f"Belief: Player #{member} is Good.")
-            else:
-                #evil_containing_combination = []
-                for member in self.env.quest_team:
-                    evil_containing_combination.append(member)
-        
-        # update my believes: I will never choose a Team with this combination
-        if evil_containing_combination and set(evil_containing_combination) not in self.exclude_combinations: # if there is a combination to exclude
-            self.exclude_combinations.append(set(evil_containing_combination))
-        if verbose:
-            print(f'+++++++ This combination should be ruled out: {evil_containing_combination}')
-            print(f'To rule out: {self.exclude_combinations}')
+    def update_believes(self, verbose=False):
+        if not self.env.done:        
+            if verbose:
+                print(f"+++++ Updating Believes for player #{self.player}")
+            
+            # Updating believes
+            # Assumes that all Good vote 1, all Evil vote 0
+            #print(self.env.quest_team)
+            #print(self.env.quest_votes)
+
+            accepted_votes = sum(self.env.quest_votes)
+
+            # Assumes that all Good vote 1, all Evil vote 0
+            pos_combinations_strict = [comb for comb in self.possible_combinations if sum( comb[member] for member in self.env.quest_team ) == accepted_votes ]
+            #print("strict combinations:", pos_combinations_strict)
+            #print(pos_combinations_strict == True)
+            # But Evil can vote 1 also. You can't get empty list of combinations
+            if pos_combinations_strict:  # if list is not empty
+                self.possible_combinations = pos_combinations_strict
+            
+            self.probabilities_good = np.array(self.possible_combinations).sum(axis=0) / len(self.possible_combinations)
+            #print(self.possible_combinations)
+            #print(self.probabilities_good)
+
+            if verbose:
+                print(f'Player #{self.player}.')
+                print(f'Possible combinations : {self.possible_combinations}')
+                print(f'Probabilities to be Good: {self.probabilities_good }')
+    
 
 class NaiveMerlin:
     def __init__(self, env, player: int):

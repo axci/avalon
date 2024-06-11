@@ -3,7 +3,7 @@ from gymnasium import spaces
 from pydantic import BaseModel
 from typing import  ClassVar, Dict, List, Tuple
 import numpy as np
-from itertools import combinations, product
+from itertools import combinations, permutations
 
 class AvalonGameSetup(BaseModel):
     """
@@ -218,6 +218,26 @@ class AvalonGameEnv(gym.Env):
         """ Return the size of the team according to the game round """
         return self.num_players_for_quest[self.round]
     
+    def get_combinations_for_servant(self, player: int) -> List:
+        """
+        Given Servant player id, 
+        get all possible combinations of Evil/Good for the Servant.
+        """
+        elements = [0] * self.num_evil + [1] * (self.num_good - 1)  # not including yourself
+        
+        # Generate all permutations
+        all_permutations = list(permutations(elements))
+
+        # Remove duplicate permutations by converting the list to a set, then back to a list
+        unique_permutations = list(set(all_permutations))
+        possible_combinations = [list(perm) for perm in unique_permutations]  ##Create a list of lists
+
+        # Insert youself as Good (1)
+        for perm in possible_combinations:
+            perm.insert(player, 1)
+
+        return possible_combinations
+
     def get_team_combinations(self) -> List:
         team_combinations = list(combinations(range(self.num_players), self.get_team_size()))
         return team_combinations
