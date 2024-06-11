@@ -3,6 +3,7 @@ from gymnasium import spaces
 from pydantic import BaseModel
 from typing import  ClassVar, Dict, List, Tuple
 import numpy as np
+from itertools import combinations, product
 
 class AvalonGameSetup(BaseModel):
     """
@@ -87,8 +88,17 @@ class AvalonGameEnv(gym.Env):
     # metadata = []
     
     def __init__(self, setup: AvalonGameSetup, render_mode=None):
-        self.setup = setup
+        """
+        action_space: {
+            phase 0: all possible combinations for team selection 
+            phase 1: 
+            phase 2,
+            phase 3,              
+        }
+            
+        """
         
+        self.setup = setup        
         # this will give me self.num_players, self.num_good, ... from AvalonGameSetup
         for key, value in setup.dict().items():
             setattr(self, key, value)  
@@ -96,12 +106,20 @@ class AvalonGameEnv(gym.Env):
         self.render_mode = render_mode
 
         self.observation_space = spaces.Dict({
-            "num_players": spaces.Discrete(6),   # from 5 to 10
+            "num_players": spaces.Discrete(6, start=5),   # from 5 to 10
             "round": spaces.Discrete(5),         # from 0 to 4
             "phase": spaces.Discrete(4),         # from 0 to 3 
             "quest_leader": spaces.Discrete(self.num_players)  # Leader is one of the players
         })
-        self.action_space = None  # ======== ??? ===================
+
+        # Generate all possible combinations for team selection. 
+        # In the last round ([-1]) there are the maximum number of team members.
+        #max_number_team_members = self.num_players_for_quest[-1]
+        #self.team_combinations = list(combinations(range(self.num_players), max_number_team_members))
+        #self.team_voting_combinations = list(product([0, 1], repeat=self.num_players))
+        #self.quest_voting_combinations = list(product([0, 1], repeat=max_number_team_members))
+
+        self.action_space = None  # ??????
         
     def _get_obs(self):
         return {
@@ -112,7 +130,12 @@ class AvalonGameEnv(gym.Env):
         }
     
     def _get_info(self):
-        return {}
+        return {
+            "num_players": self.num_players,
+            "round": self.round,
+            "phase": self.phase,
+            "good_victory": self.good_victory,
+        }
     
     def reset(self, seed=None, options=None):
         """ Reset game environment. """
@@ -195,6 +218,17 @@ class AvalonGameEnv(gym.Env):
         """ Return the size of the team according to the game round """
         return self.num_players_for_quest[self.round]
     
+    def get_team_combinations(self) -> List:
+        team_combinations = list(combinations(range(self.num_players), self.get_team_size()))
+        return team_combinations
+    
+    def get_team_good_combinations(self) -> List:
+        """ 
+        Get all possible combinations with Good players
+        """
+        team_combinations = list(combinations(np.where(self.is_good)[0], self.get_team_size()))
+        return team_combinations
+    
     def choose_quest_team(self, team: List, leader: int, verbose=False):
         """ 
         ========== PHASE 0 =============
@@ -212,15 +246,14 @@ class AvalonGameEnv(gym.Env):
         assert self.phase == 0, f"The game must be in the phase 0 (Team Building), but the game now is in the phase {self.get_phase()}."
         assert leader == self.leader, f"The leader should be the player #{self.leader}."
         
-        
         self.quest_team = team  
         
         self.phase += 1  # move to the next phase - Voting
         self.leader = (leader + 1) % self.num_players  # change the leader
         if verbose:
-            print(f"Round #{self.round + 1} (0, Team Building):")
-            print(f'The leader (player #{leader} chooses the team {self.quest_team})')
-            print(f"The next leader will be the player #{self.leader}")
+            print(f"ROUND #{self.round + 1}. Phase: (0, Team Building):")
+            print(f'Leader: player #{leader}. Chosen Team: {self.quest_team})')
+            print(f"The next Leader: player #{self.leader}")
             print("=========================================")
         return (self.phase, self.done, self.leader)
     
@@ -245,27 +278,28 @@ class AvalonGameEnv(gym.Env):
             self.phase += 1  # move to the next phase
             self.voting_attempt = 0  # reset voting attempts
             if verbose:
-                print(f"Round #{self.round + 1} (1, Team Voting):")
-                print(f'Successful vote. The majority ({sum(votes)} out of {self.num_players}) voted for the team.')
-                print(f'The next phase will be {self.get_phase()}')
+                print(f"ROUND #{self.round + 1}. Phase: (1, Team Voting):")
+                print(f'Success. ({sum(votes)} out of {self.num_players}) voted for the Team.')
+                print(f'The next Phase: {self.get_phase()}')
                 print("=========================================")
             return (self.phase, self.done, True)
         else:
             self.phase = 0
             self.voting_attempt += 1
-            print(f"Round #{self.round + 1} (1, Team Voting):")
-            print(f'Failed vote. Only {sum(votes)} out of {self.num_players} players voted for the team (should be majority).')
-            print(f"The total number of failed votes in this round: {self.voting_attempt}.")
-            print(f'The next phase will be {self.get_phase()}.')
-            print("=========================================")
-
+            if verbose:
+                print(f"ROUND #{self.round + 1}. Phase: (1, Team Voting):")
+                print(f'Fail. {sum(votes)} out of {self.num_players} players voted for the Team (should be majority).')
+                print(f"The total number of failed elections in this Round: {self.voting_attempt}.")
+                print(f'The next Phase: {self.get_phase()}.')
+                print("=========================================")
             
             # Evil wins the game if 5 teams are rejected in a single round 
             if self.voting_attempt == self.setup.MAX_ROUNDS:
                 self.done = True  # XXXXXXXXXXX END OF THE GAME XXXXXXXXXXXX
                 self.good_victory = False
+                self.phase = 1
                 if verbose:
-                    print(f'The end. 5 consecutive failed Votes. Evil wins 😈 ')
+                    print(f'== The end ==. 5 consecutive failed Votes. Evil wins 😈 ')
             return (self.phase, self.done, False)     
         
     def gather_quest_votes(self, votes: List[int], verbose=False) -> Tuple[int, bool, bool, int]:
@@ -287,7 +321,6 @@ class AvalonGameEnv(gym.Env):
         if num_fails >= votes_to_fail:
             # fail
             self.quest_results.append(False) # save history
-            self.round += 1
             
             # count number of fails
             total_num_fails = len(self.quest_results) - sum(self.quest_results)
@@ -296,35 +329,41 @@ class AvalonGameEnv(gym.Env):
                 self.done = True  # XXXXXXXX END OF THE GAME XXXXXXXXXXXX
                 self.good_victory = False
                 if verbose:
-                    print(f"Round #{self.round} (2, Quest Voting):")
-                    print(f"Quest failed. {num_fails} player(s) voted for fail. ")
-                    print(f'The end. 3 failed votes. Evil wins 😈 ')
+                    print(f"ROUND #{self.round + 1}. Phase: (2, Quest Voting)")
+                    print(f'Quest Team: {self.quest_team}')
+                    print(f"Quest failed. {num_fails} player(s) voted to Fail.")
+                    print(f'== The end. 3 failed Quests. Evil wins 😈 ')
                     print("=========================================")
             else:
-                self.phase = 0
+                if self.round != 4:
+                    self.round += 1
+                    self.phase = 0
                 if verbose:
-                    print(f"Round {self.round} (2, Quest Voting):")
-                    print(f"Quest failed. {num_fails} player(s) voted for fail. ")
-                    print(f"Total number of failed quests: {total_num_fails}.")
-                    print(f"The next round will be {self.round + 1}. The next Phase will be {self.get_phase()}")
+                    print(f"ROUND #{self.round}. Phase: (2, Quest Voting)")
+                    print(f'Quest Team: {self.quest_team}')
+                    print(f"Quest failed. {num_fails} player(s) voted to Fail. ")
+                    print(f"Total number of failed Quests: {total_num_fails}.")
+                    print(f"The next Round: {self.round + 1}. The next Phase: {self.get_phase()}")
                     print("=========================================")
             return (self.phase, self.done, False, num_fails)
         
         else: # SUCCESS
             self.quest_results.append(True)
-            self.round += 1
             
             # 3 successes?
             if sum(self.quest_results) == 3:
                 self.phase += 1 # go to the assassination phase
             else:
-                self.phase = 0
+                if self.round !=4:
+                    self.round += 1
+                    self.phase = 0
             if verbose:
                     total_num_fails = len(self.quest_results) - sum(self.quest_results)
-                    print(f"Round {self.round} (2, Quest Voting):")
-                    print(f"Quest succeeded. {num_fails} player(s) voted for fail. ")
-                    print(f"Total number of failed quests: {total_num_fails}.")
-                    print(f"The next round will be {self.round + 1}. The next Phase will be {self.get_phase()}")
+                    print(f"ROUND #{self.round + 1}. Phase: (2, Quest Voting):")
+                    print(f'Quest Team: {self.quest_team}')
+                    print(f"Quest succeeded. {num_fails} player(s) voted to Fail.")
+                    print(f"Total number of failed Quests: {total_num_fails}.")
+                    print(f"The next Round: {self.round + 1}. The next Phase: {self.get_phase()}")
                     print("=========================================")
             
             return (self.phase, self.done, True, num_fails)
@@ -348,23 +387,41 @@ class AvalonGameEnv(gym.Env):
             self.good_victory = True
         
         if verbose:
-            print(f"Round (self.round) (3, Assassination):")
+            print(f"ROUND #{self.round + 1}. Phase: (3, Assassination)")
             print(f"Assassin chooses the player #{target} ({self.get_role(target)}) as a target.")
             if self.good_victory:
-                print(f"Good wins!")
+                print(f"== The End. Good wins!")
             else:
-                print(f"Evil wins 😈 ")
+                print(f"== The End. Evil wins 😈 ")
         return (self.phase, self.done, self.good_victory)
     
-    def step(self, action):
-        terminated = self.done
+    def step(self, action, verbose=False):
+        ##### PHASE 0: TEAM BUILDING #####
+        ##### Decision maker: Leader #####
+        if self.phase == 0:
+            team = action
+            self.choose_quest_team(team, self.leader, verbose=verbose)         
+
+        elif self.phase == 1:
+            votes = action
+            self.gather_team_votes(votes, verbose=verbose)
+
+        elif self.phase == 2:
+            votes = action
+            self.gather_quest_votes(votes, verbose=verbose)
+
+        elif self.phase == 3:
+            target = action
+            player = np.where(self.roles==3)[0][0]  # index of assassin player
+            self.choose_assassin_target(player, target, verbose=verbose)
+
         observation = self._get_obs()
         info = self._get_info()
         reward = None
-        return observation, reward, terminated, False, info
+        return observation, reward, self.done, False, info
         
 
-def simulate_game(num_players=5):
+def simulate_game(num_players=5, verbose=False):
     print('== GAME BEGINS ==')
     setup = AvalonGameSetup.from_num_players(num_players)
     env = AvalonGameEnv(setup)
@@ -374,20 +431,20 @@ def simulate_game(num_players=5):
     while not env.done:
         # PHASE 0
         team = np.random.choice(range(num_players), size=env.num_players_for_quest[env.round], replace=False).tolist()
-        phase, done, leader = env.choose_quest_team(team, leader, verbose=True)
+        phase, done, leader = env.choose_quest_team(team, leader, verbose=verbose)
         
         # PHASE 1
         votes = np.random.choice([0, 1], size=num_players, replace=True)
-        next_phase, done, team_is_accepted = env.gather_team_votes(votes, verbose=True)
+        next_phase, done, team_is_accepted = env.gather_team_votes(votes, verbose=verbose)
         
         if next_phase == 2:
             # PHASE 2
             votes_quest = np.random.choice([0, 1], size=env.num_players_for_quest[env.round], replace=True, p=[0.2, 0.8])
-            next_phase, done, quest_is_succeded, fails_num = env.gather_quest_votes(votes_quest, verbose=True)
+            next_phase, done, quest_is_succeded, fails_num = env.gather_quest_votes(votes_quest, verbose=verbose)
 
         if next_phase == 3:
             player = np.where(env.roles==3)[0][0]  # index of assassin player
             good_players = np.where(env.is_good)[0]
             target = np.random.choice(good_players)
-            env.choose_assassin_target(player, target, verbose=True)
+            env.choose_assassin_target(player, target, verbose=verbose)
     return env.good_victory
